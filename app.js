@@ -5,9 +5,9 @@ const bodyParser = require('body-parser')
 const request = require('./util/request')
 const packageJSON = require('./package.json')
 const exec = require('child_process').exec
-const cache = require('./util/apicache').middleware
-const { cookieToJson } = require('./util/index')
-const fileUpload = require('express-fileupload');
+const cache = require('apicache').middleware
+const https = require('https')
+
 // version check
 exec('npm info NeteaseCloudMusicApi version', (err, stdout, stderr) => {
   if(!err){
@@ -48,15 +48,12 @@ app.use((req, res, next) => {
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({extended: false}))
 
-app.use(fileUpload());
-
-
+// cache
+app.use(cache('2 minutes', ((req, res) => res.statusCode === 200)))
 
 // static
 app.use(express.static(path.join(__dirname, 'public')))
 
-// cache
-app.use(cache('2 minutes', ((req, res) => res.statusCode === 200)))
 // router
 const special = {
   'daily_signin.js': '/daily_signin',
@@ -70,31 +67,40 @@ fs.readdirSync(path.join(__dirname, 'module')).reverse().forEach(file => {
   let question = require(path.join(__dirname, 'module', file))
 
   app.use(route, (req, res) => {
-    if(typeof req.query.cookie === 'string'){
-      req.query.cookie = cookieToJson(req.query.cookie)
-    }
-    let query = Object.assign({}, {cookie: req.cookies}, req.query, req.body, req.files )
-
+    let query = Object.assign({}, {cookie: req.cookies}, req.query, req.body )
     question(query, request)
-      .then(answer => {
-        console.log('[OK]', decodeURIComponent(req.originalUrl))
-        res.append('Set-Cookie', answer.cookie)
-        res.status(answer.status).send(answer.body)
-      })
-      .catch(answer => {
-        console.log('[ERR]', decodeURIComponent(req.originalUrl), {status: answer.status, body: answer.body})
-        if(answer.body.code == '301') answer.body.msg = '需要登录'
-        res.append('Set-Cookie', answer.cookie)
-        res.status(answer.status).send(answer.body)
-      })
+        .then(answer => {
+          console.log('[OK]', decodeURIComponent(req.originalUrl))
+          res.append('Set-Cookie', answer.cookie)
+          res.status(answer.status).send(answer.body)
+        })
+        .catch(answer => {
+          console.log('[ERR]', decodeURIComponent(req.originalUrl), {status: answer.status, body: answer.body})
+          if(answer.body.code == '301') answer.body.msg = '需要登录'
+          res.append('Set-Cookie', answer.cookie)
+          res.status(answer.status).send(answer.body)
+        })
   })
 })
 
 const port = process.env.PORT || 3000
 const host = process.env.HOST || ''
 
-app.server = app.listen(port, host, () => {
-  console.log(`server running @ http://${host ? host : 'localhost'}:${port}`)
+
+//导入证书文件
+const privateKey = fs.readFileSync(path.join(__dirname, './certificate/2_www.isonepoch.cn.key'), 'utf8')
+const certificate = fs.readFileSync(path.join(__dirname, './certificate/1_www.isonepoch.cn_bundle.crt'), 'utf8')
+const credentials = {
+  key: privateKey,
+  cert: certificate,
+}
+//创建https服务器实例
+const httpsServer = https.createServer(credentials, app)
+
+// app.server = app.listen(port, host, () => {
+//   console.log(`server running @ http://${host ? host : 'localhost'}:${port}`)
+// })
+app.server = httpsServer.listen(4000, () => {
 })
 
 module.exports = app
